@@ -392,3 +392,28 @@ describe("filterProcesses", () => {
     assert.deepEqual(M.filterProcesses(null, "x"), [])
   })
 })
+
+describe("time ranges", () => {
+  it("RANGES are 10s, 1m, 5m, 10m", () => {
+    assert.deepEqual(M.RANGES, [10, 60, 300, 600])
+  })
+  it("windowSamples converts seconds to 2s samples, clamped", () => {
+    assert.equal(M.windowSamples(10, 2), 5)
+    assert.equal(M.windowSamples(60, 2), 30)
+    assert.equal(M.windowSamples(600, 2), 300)
+    assert.equal(M.windowSamples(3600, 2), 300)
+    assert.equal(M.windowSamples(1, 2), 2)
+    assert.equal(M.windowSamples(null, 2), 300)
+  })
+  it("lastWindow keeps the newest n", () => {
+    assert.deepEqual(M.lastWindow([1, 2, 3, 4, 5], 2), [4, 5])
+    assert.deepEqual(M.lastWindow([1, 2], 5), [1, 2])
+    assert.deepEqual(M.lastWindow(null, 3), [])
+  })
+  it("fmtRange", () => {
+    assert.equal(M.fmtRange(10), "10S")
+    assert.equal(M.fmtRange(60), "1M")
+    assert.equal(M.fmtRange(300), "5M")
+    assert.equal(M.fmtRange(90), "90S")
+  })
+})

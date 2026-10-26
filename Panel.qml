@@ -89,7 +89,7 @@ Panel {
   function windowTitle() {
     var n = hostWidget ? hostWidget.sampleCount : 0
     if (!n) return "COLLECTING SAMPLES…"
-    var secs = Math.min(n * 2, 600)
+    var secs = Math.min(n * 2, root.rangeSec)
     var mm = Math.floor(secs / 60), ss = secs % 60
     return "LAST " + mm + "M " + (ss < 10 ? "0" + ss : ss) + "S · 2S SAMPLES"
   }
@@ -130,6 +130,26 @@ Panel {
   function loudestDriver() {
     if (!hostWidget) return ""
     return "← " + (hostWidget.loudestFan === "gpu" ? gpuFanLine() : cpuFanLine())
+  }
+
+  // ---- time range (graphs + averages) ----
+  // Kept across opens; the bar tooltip keeps its fixed 10-minute averages.
+  property int rangeSec: 600
+  readonly property int rangeSamples: Model.windowSamples(rangeSec, hostWidget ? hostWidget.pollMs / 1000 : 2)
+
+  function win(history) {
+    return Model.lastWindow(history, root.rangeSamples)
+  }
+
+  function wavg(history) {
+    return Model.average(root.win(history))
+  }
+
+  function stepRange(delta) {
+    var r = Model.RANGES
+    var i = r.indexOf(root.rangeSec)
+    if (i < 0) i = r.length - 1
+    root.rangeSec = r[Math.max(0, Math.min(r.length - 1, i + delta))]
   }
 
   // ---- process table state (raw list lives on hostWidget) ----
@@ -196,6 +216,8 @@ Panel {
       onTextKey: function(t) {
         var n = parseInt(t, 10)
         if (n >= 1 && n <= root.tabs.length) root.selectTab(root.tabs[n - 1].id)
+        else if (t === "[" || t === "-") root.stepRange(-1)
+        else if (t === "]" || t === "+" || t === "=") root.stepRange(1)
         else if (t === "/") {
           root.selectTab("procs")
           filterField.forceActiveFocus()
@@ -240,6 +262,39 @@ Panel {
           foreground: root.contentForeground
         }
 
+        // ---------- Time range ----------
+        // Window for every graph and AVG value; hidden on Processes.
+        RowLayout {
+          Layout.fillWidth: true
+          visible: root.currentTab !== "procs"
+          spacing: Style.space(6)
+
+          Text {
+            Layout.fillWidth: true
+            textFormat: Text.PlainText
+            text: "RANGE"
+            color: root.mutedForeground
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+
+          Repeater {
+            model: Model.RANGES
+            Button {
+              required property var modelData
+              text: Model.fmtRange(modelData)
+              selected: root.rangeSec === modelData
+              fontFamily: root.contentFontFamily
+              fontSize: Style.font.caption
+              horizontalPadding: Style.space(8)
+              verticalPadding: Style.space(2)
+              tooltipText: "Show the last " + Model.fmtRange(modelData).toLowerCase()
+              onClicked: root.rangeSec = modelData
+            }
+          }
+        }
+
         // ---------- Pages ----------
         Item {
           Layout.fillWidth: true
@@ -264,7 +319,7 @@ Panel {
                 sub: hostWidget ? Model.fmtTemp(hostWidget.cpuTemp) : "--"
                 subColor: root.tempColor
                 lineColor: Color.accent
-                history: hostWidget ? hostWidget.cpuHist : []
+                history: hostWidget ? root.win(hostWidget.cpuHist) : []
                 target: "cpu"
               }
               OverviewCard {
@@ -275,7 +330,7 @@ Panel {
                 sub: hostWidget ? Model.fmtTemp(hostWidget.gpuTemp) : "--"
                 subColor: root.tempColor
                 lineColor: Color.accent
-                history: hostWidget ? hostWidget.gpuHist : []
+                history: hostWidget ? root.win(hostWidget.gpuHist) : []
                 target: "gpu"
               }
               OverviewCard {
@@ -283,7 +338,7 @@ Panel {
                 hint: hostWidget ? Model.fmtMemDetail(hostWidget.memUsedKb, hostWidget.memTotalKb) + " ›" : "›"
                 value: hostWidget ? Model.fmtPct(hostWidget.mem) : "--"
                 lineColor: root.memColor
-                history: hostWidget ? hostWidget.memHist : []
+                history: hostWidget ? root.win(hostWidget.memHist) : []
                 target: "memory"
               }
               OverviewCard {
@@ -297,7 +352,7 @@ Panel {
                 subColor: root.contentForeground
                 lineColor: root.tempColor
                 history: !hostWidget ? []
-                  : hostWidget.loudestFan === "gpu" ? hostWidget.gpuFanHist : hostWidget.cpuFanHist
+                  : root.win(hostWidget.loudestFan === "gpu" ? hostWidget.gpuFanHist : hostWidget.cpuFanHist)
                 target: "fans"
               }
             }
@@ -374,10 +429,10 @@ Panel {
             StatRow {
               label: "USAGE"
               now: hostWidget ? Model.fmtPct(hostWidget.cpu) : "--"
-              avg: hostWidget ? Model.fmtPct(hostWidget.cpuAvg) : "--"
+              avg: hostWidget ? Model.fmtPct(root.wavg(hostWidget.cpuHist)) : "--"
             }
             HistoryGraph {
-              history: hostWidget ? hostWidget.cpuHist : []
+              history: hostWidget ? root.win(hostWidget.cpuHist) : []
               lineColor: Color.accent
               unit: "%"
               graphHeight: Style.space(88)
@@ -385,10 +440,10 @@ Panel {
             StatRow {
               label: "TEMP"
               now: hostWidget ? Model.fmtTemp(hostWidget.cpuTemp) : "--"
-              avg: hostWidget ? Model.fmtTemp(hostWidget.cpuTempAvg) : "--"
+              avg: hostWidget ? Model.fmtTemp(root.wavg(hostWidget.cpuTempHist)) : "--"
             }
             HistoryGraph {
-              history: hostWidget ? hostWidget.cpuTempHist : []
+              history: hostWidget ? root.win(hostWidget.cpuTempHist) : []
               lineColor: root.tempColor
               unit: "°"
               maxVal: 120
@@ -422,10 +477,10 @@ Panel {
             StatRow {
               label: "USAGE"
               now: hostWidget ? Model.fmtPct(hostWidget.gpu) : "--"
-              avg: hostWidget ? Model.fmtPct(hostWidget.gpuAvg) : "--"
+              avg: hostWidget ? Model.fmtPct(root.wavg(hostWidget.gpuHist)) : "--"
             }
             HistoryGraph {
-              history: hostWidget ? hostWidget.gpuHist : []
+              history: hostWidget ? root.win(hostWidget.gpuHist) : []
               lineColor: Color.accent
               unit: "%"
               graphHeight: Style.space(100)
@@ -433,10 +488,10 @@ Panel {
             StatRow {
               label: "TEMP"
               now: hostWidget ? Model.fmtTemp(hostWidget.gpuTemp) : "--"
-              avg: hostWidget ? Model.fmtTemp(hostWidget.gpuTempAvg) : "--"
+              avg: hostWidget ? Model.fmtTemp(root.wavg(hostWidget.gpuTempHist)) : "--"
             }
             HistoryGraph {
-              history: hostWidget ? hostWidget.gpuTempHist : []
+              history: hostWidget ? root.win(hostWidget.gpuTempHist) : []
               lineColor: root.tempColor
               unit: "°"
               maxVal: 120
@@ -464,11 +519,11 @@ Panel {
             StatRow {
               label: "USAGE"
               now: hostWidget ? Model.fmtPct(hostWidget.mem) : "--"
-              avg: hostWidget ? Model.fmtPct(hostWidget.memAvg) : "--"
+              avg: hostWidget ? Model.fmtPct(root.wavg(hostWidget.memHist)) : "--"
               extra: hostWidget ? Model.fmtMemDetail(hostWidget.memUsedKb, hostWidget.memTotalKb) : ""
             }
             HistoryGraph {
-              history: hostWidget ? hostWidget.memHist : []
+              history: hostWidget ? root.win(hostWidget.memHist) : []
               lineColor: root.memColor
               unit: "%"
               graphHeight: Style.space(130)
@@ -500,7 +555,7 @@ Panel {
               visible: root.hasCpuFan
               label: "CPU FAN"
               now: hostWidget ? Model.fmtPct(hostWidget.cpuFanDuty) : "--"
-              avg: hostWidget ? Model.fmtPct(hostWidget.cpuFanAvg) : "--"
+              avg: hostWidget ? Model.fmtPct(root.wavg(hostWidget.cpuFanHist)) : "--"
               extra: hostWidget ? Model.fmtRpm(hostWidget.cpuFanRpm) : ""
             }
             FanDriver {
@@ -510,7 +565,7 @@ Panel {
             }
             HistoryGraph {
               visible: root.hasCpuFan
-              history: hostWidget ? hostWidget.cpuFanHist : []
+              history: hostWidget ? root.win(hostWidget.cpuFanHist) : []
               lineColor: root.tempColor
               unit: "%"
               graphHeight: Style.space(90)
@@ -519,7 +574,7 @@ Panel {
               visible: root.hasGpuFan
               label: "GPU FAN"
               now: hostWidget ? Model.fmtPct(hostWidget.gpuFan) : "--"
-              avg: hostWidget ? Model.fmtPct(hostWidget.gpuFanAvg) : "--"
+              avg: hostWidget ? Model.fmtPct(root.wavg(hostWidget.gpuFanHist)) : "--"
               extra: hostWidget && hostWidget.gpuFan === 0 ? "idle stop" : ""
             }
             FanDriver {
@@ -529,7 +584,7 @@ Panel {
             }
             HistoryGraph {
               visible: root.hasGpuFan
-              history: hostWidget ? hostWidget.gpuFanHist : []
+              history: hostWidget ? root.win(hostWidget.gpuFanHist) : []
               lineColor: Color.accent
               unit: "%"
               graphHeight: Style.space(90)
@@ -641,7 +696,7 @@ Panel {
         Text {
           Layout.fillWidth: true
           textFormat: Text.PlainText
-          text: "1–" + root.tabs.length + " or ←/→ switch tabs · / filter · Esc close"
+          text: "1–" + root.tabs.length + " or ←/→ tabs · [ ] range · / filter · Esc close"
           color: root.mutedForeground
           font.family: root.contentFontFamily
           font.pixelSize: Style.font.caption
@@ -868,7 +923,7 @@ Panel {
     }
   }
 
-  // "LABEL   NOW x   AVG 10M y" row with optional trailing detail.
+  // "LABEL   NOW x   AVG <range> y" row with optional trailing detail.
   component StatRow: Item {
     id: statRow
     required property string label
@@ -908,7 +963,7 @@ Panel {
     Text {
       id: avgText
       textFormat: Text.PlainText
-      text: "AVG 10M " + statRow.avg
+      text: "AVG " + Model.fmtRange(root.rangeSec) + " " + statRow.avg
       color: root.mutedForeground
       font.family: root.contentFontFamily
       font.pixelSize: Style.font.body

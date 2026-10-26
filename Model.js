@@ -69,6 +69,30 @@ function average(history) {
   return total / count;
 }
 
+// Selectable graph/average windows, in seconds (popup range buttons).
+var RANGES = [10, 60, 300, 600];
+
+// Samples covering `seconds` at one sample per `sampleSec`; at least 2 so
+// a line can be drawn, at most the stored history.
+function windowSamples(seconds, sampleSec) {
+  var sec = Number(seconds), step = Number(sampleSec) || 2;
+  if (!isFinite(sec) || sec <= 0) return HISTORY_LIMIT;
+  return Math.max(2, Math.min(HISTORY_LIMIT, Math.round(sec / step)));
+}
+
+// Newest n samples of a history (whole list when shorter).
+function lastWindow(history, n) {
+  var list = Array.isArray(history) ? history : [];
+  var k = Math.max(1, parseInt(n, 10) || 1);
+  return list.length > k ? list.slice(list.length - k) : list.slice();
+}
+
+// 10 -> "10S", 60 -> "1M", 300 -> "5M".
+function fmtRange(seconds) {
+  var s = Math.round(Number(seconds) || 0);
+  return s >= 60 && s % 60 === 0 ? (s / 60) + "M" : s + "S";
+}
+
 function fmtPct(v) {
   if (typeof v !== "number" || !isFinite(v)) return "--";
   return v.toFixed(v < 10 ? 1 : 0) + "%";
@@ -262,6 +286,10 @@ function xFor(i, count, width) {
 if (typeof module !== "undefined") {
   module.exports = {
     HISTORY_LIMIT: HISTORY_LIMIT,
+    RANGES: RANGES,
+    windowSamples: windowSamples,
+    lastWindow: lastWindow,
+    fmtRange: fmtRange,
     numOrNull: numOrNull,
     parseStats: parseStats,
     pushHistory: pushHistory,

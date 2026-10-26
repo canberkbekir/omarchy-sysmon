@@ -21,23 +21,46 @@ Top bar (`BarWidget.qml`):
 
 - Compact CPU / GPU / memory usage plus temperatures; the GPU readout
   hides itself when no GPU is detected
-- Hover tooltip with current values and 10-minute averages
+- Fan readout: the hardest-working fan (CPU fan duty or GPU fan %)
+- Hover tooltip with current values, 10-minute averages, and what each
+  fan is reacting to (temperature, load, busiest process)
 - Left-click toggles the popup, right-click forces a refresh
 
-Popup (`Panel.qml`):
+Popup (`Panel.qml`), split into tabs so nothing needs scrolling:
 
-- Summary rings for CPU / GPU / memory with temperatures and GB detail
-- Current values, 10-minute averages, and line-graph history per metric
-- `↓ PROCESSES` jump button with a live process count
-- Process table (top 25) sortable by process, PID, CPU, or memory
-- Memory shown as absolute plus percent (`1.3GB (3.6%)`)
-- Click a PID to copy it; TERM / KILL buttons per row
+- **Overview**: CPU / GPU / memory / fan cards with sparklines (click a
+  card to open its tab), a "loudest fan" banner, and the top 5 processes
+- **CPU / GPU / MEM**: current value, average, and history graphs, the
+  fan that cools it, and the top processes
+- **Fans**: CPU fan RPM + duty and GPU fan %, each with history and the
+  component driving it
+- **Procs**: full process list with a name/PID filter, sortable by
+  process, PID, CPU, or memory; click a PID to copy it; TERM / KILL
+- Time range buttons (10s / 1m / 5m / 10m) for every graph and average
+- Keys: `1`–`6` or `←`/`→` switch tabs, `[` / `]` change the range,
+  `/` filters processes, `Esc` closes
 - Theme-aware colors following the active Omarchy theme
+
+Fan sensors:
+
+- GPU fan comes from `nvidia-smi`
+- CPU fan comes from the motherboard Super I/O chip (`nct668x`,
+  `nct67xx`, `nct6775`, `it87`). Many boards need its driver loaded
+  first, e.g. MSI boards with an NCT6687:
+
+  ```bash
+  echo nct6683 | sudo tee /etc/modules-load.d/nct6683.conf
+  echo "options nct6683 force=1" | sudo tee /etc/modprobe.d/nct6683.conf
+  sudo modprobe nct6683 force=1
+  ```
+
+  Without a fan sensor the fan readouts and tab hide themselves.
 
 Under the hood:
 
 - `stats.sh` polls system stats every 2s; `processes.sh` samples the
-  process list every 2s but only while the popup is open
+  process list every 2s while the popup is open, and every 10s otherwise
+  (for the tooltip's busiest process)
 - Shared `Model.js`: all parsing, formatting, and ordering as pure,
   unit-tested functions (`node --test tests/`, no dependencies)
 - `./tests/integration.sh`: live end-to-end test via shell IPC
