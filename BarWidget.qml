@@ -26,6 +26,9 @@ BarWidget {
   property var mem: null
   property var memUsedKb: null
   property var memTotalKb: null
+  property var cpuFanRpm: null
+  property var cpuFanDuty: null
+  property var gpuFan: null
 
   // ---- 10-minute histories (2s x 300) ----
   property var cpuHist: []
@@ -33,12 +36,21 @@ BarWidget {
   property var gpuHist: []
   property var gpuTempHist: []
   property var memHist: []
+  property var cpuFanHist: []
+  property var gpuFanHist: []
 
   readonly property var cpuAvg: Model.average(cpuHist)
   readonly property var cpuTempAvg: Model.average(cpuTempHist)
   readonly property var gpuAvg: Model.average(gpuHist)
   readonly property var gpuTempAvg: Model.average(gpuTempHist)
   readonly property var memAvg: Model.average(memHist)
+  readonly property var cpuFanAvg: Model.average(cpuFanHist)
+  readonly property var gpuFanAvg: Model.average(gpuFanHist)
+  readonly property bool hasCpuFan: cpuFanRpm !== null
+  readonly property bool hasGpuFan: hasGpu && gpuFan !== null
+  readonly property string loudestFan: Model.loudestFan({ cpuFanDuty: hasCpuFan ? cpuFanDuty : null, gpuFan: hasGpuFan ? gpuFan : null })
+  // Busiest process from the last sample (list is sorted by cpu desc).
+  readonly property var topProc: processes.length > 0 ? processes[0] : null
   readonly property int sampleCount: Math.max(cpuHist.length, memHist.length)
   readonly property bool hasGpu: gpuVendor !== "none"
 
@@ -51,6 +63,9 @@ BarWidget {
   readonly property string procHelperPath: (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/wartafak.sysmon/processes.sh"
   readonly property string killHelperPath: (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/wartafak.sysmon/killproc.sh"
   readonly property int procPollMs: 2000
+  // While the panel is closed, sample processes slowly so the tooltip can
+  // still name what is heating the CPU.
+  readonly property int procIdlePollMs: 10000
 
   // ---- theme palette (dynamic) ----
   // qs.Commons.Color only exposes foreground/background/accent/urgent/
@@ -142,6 +157,9 @@ BarWidget {
     root.mem = s.mem
     root.memUsedKb = s.memUsedKb
     root.memTotalKb = s.memTotalKb
+    root.cpuFanRpm = s.cpuFanRpm
+    root.cpuFanDuty = s.cpuFanDuty
+    root.gpuFan = s.gpuFan
     // Histories only advance on real samples so a failed poll leaves a
     // gap instead of fabricating a zero.
     root.cpuHist = Model.pushHistory(root.cpuHist, s.cpu, Model.HISTORY_LIMIT)
@@ -149,6 +167,8 @@ BarWidget {
     root.gpuHist = Model.pushHistory(root.gpuHist, s.gpu, Model.HISTORY_LIMIT)
     root.gpuTempHist = Model.pushHistory(root.gpuTempHist, s.gpuTemp, Model.HISTORY_LIMIT)
     root.memHist = Model.pushHistory(root.memHist, s.mem, Model.HISTORY_LIMIT)
+    root.cpuFanHist = Model.pushHistory(root.cpuFanHist, s.cpuFanDuty, Model.HISTORY_LIMIT)
+    root.gpuFanHist = Model.pushHistory(root.gpuFanHist, s.gpuFan, Model.HISTORY_LIMIT)
   }
 
   function barText() {
@@ -158,6 +178,11 @@ BarWidget {
     if (root.hasGpu)
       parts.push(" " + Model.fmtPct(root.gpu) + " " + Model.fmtTemp(root.gpuTemp))
     parts.push(" " + Model.fmtPct(root.mem))
+    // Fan: the hardest-working one, CPU duty or GPU fan %.
+    if (root.loudestFan === "gpu")
+      parts.push("\uDB80\uDE10 " + Model.fmtPct(root.gpuFan) + " GPU")
+    else if (root.loudestFan === "cpu")
+      parts.push("\uDB80\uDE10 " + (root.cpuFanDuty !== null ? Model.fmtPct(root.cpuFanDuty) : Model.fmtRpm(root.cpuFanRpm)))
     return parts.join(" | ")
   }
 
@@ -169,6 +194,18 @@ BarWidget {
       lines.push("GPU  " + Model.fmtPct(root.gpu) + "  " + Model.fmtTemp(root.gpuTemp)
         + "   (avg " + Model.fmtPct(root.gpuAvg) + "  " + Model.fmtTemp(root.gpuTempAvg) + ")")
     lines.push("MEM  " + Model.fmtPct(root.mem) + "   (avg " + Model.fmtPct(root.memAvg) + ")")
+    if (root.hasCpuFan) {
+      lines.push("")
+      lines.push("CPU FAN  " + Model.fmtRpm(root.cpuFanRpm) + "  " + Model.fmtPct(root.cpuFanDuty)
+        + "   (avg " + Model.fmtPct(root.cpuFanAvg) + ")")
+      lines.push("  ← " + Model.cpuFanDriver({ cpuTemp: root.cpuTemp, cpu: root.cpu }, root.topProc))
+    }
+    if (root.hasGpuFan) {
+      if (!root.hasCpuFan) lines.push("")
+      lines.push("GPU FAN  " + Model.fmtPct(root.gpuFan) + (root.gpuFan === 0 ? " (idle stop)" : "")
+        + "   (avg " + Model.fmtPct(root.gpuFanAvg) + ")")
+      lines.push("  ← " + Model.gpuFanDriver({ gpuTemp: root.gpuTemp, gpu: root.gpu }))
+    }
     return lines.join("\n")
   }
 
@@ -194,6 +231,10 @@ BarWidget {
       mem: root.mem,
       memUsedKb: root.memUsedKb,
       memTotalKb: root.memTotalKb,
+      cpuFanRpm: root.cpuFanRpm,
+      cpuFanDuty: root.cpuFanDuty,
+      gpuFan: root.gpuFan,
+      loudestFan: root.loudestFan,
       hasGpu: root.hasGpu,
       sampleCount: root.sampleCount,
       cpuHistLen: root.cpuHist ? root.cpuHist.length : 0,
@@ -243,6 +284,14 @@ BarWidget {
     repeat: true
     triggeredOnStart: true
     onTriggered: { if (root.opened) root.refreshProcesses() }
+  }
+
+  Timer {
+    interval: root.procIdlePollMs
+    running: !root.opened && root.hasCpuFan
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: root.refreshProcesses()
   }
 
   Process {

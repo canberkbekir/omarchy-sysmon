@@ -13,7 +13,8 @@ function parseStats(raw) {
     cpu: null, cpuTemp: null,
     gpu: null, gpuTemp: null, gpuVendor: "none", gpuName: "", gpuShort: "",
     cpuModel: "", cpuThreads: null, cpuMaxGhz: null,
-    mem: null, memUsedKb: null, memTotalKb: null
+    mem: null, memUsedKb: null, memTotalKb: null,
+    cpuFanRpm: null, cpuFanDuty: null, gpuFan: null
   };
   var parsed;
   try {
@@ -38,7 +39,10 @@ function parseStats(raw) {
     cpuMaxGhz: numOrNull(parsed.cpu_max_ghz),
     mem: numOrNull(parsed.mem),
     memUsedKb: numOrNull(parsed.mem_used_kb),
-    memTotalKb: numOrNull(parsed.mem_total_kb)
+    memTotalKb: numOrNull(parsed.mem_total_kb),
+    cpuFanRpm: numOrNull(parsed.cpu_fan_rpm),
+    cpuFanDuty: numOrNull(parsed.cpu_fan_duty),
+    gpuFan: numOrNull(parsed.gpu_fan)
   };
 }
 
@@ -178,6 +182,17 @@ function sortProcesses(list, key, dir) {
   return arr;
 }
 
+// Process table filter: case-insensitive name substring or PID prefix.
+// Blank query keeps everything. Never mutates the input.
+function filterProcesses(list, query) {
+  var arr = Array.isArray(list) ? list : [];
+  var q = String(query || "").trim().toLowerCase();
+  if (q === "") return arr.slice();
+  return arr.filter(function (p) {
+    return String(p.comm || "").toLowerCase().indexOf(q) >= 0 || String(p.pid).indexOf(q) === 0;
+  });
+}
+
 // "1.3GB (3.6%)" — absolute RSS plus percent for the process table.
 // GB with one decimal at >= 1 GiB, whole MB below. "--" when unknown;
 // partial info still renders ("1.3GB" / "(3.6%)").
@@ -192,6 +207,39 @@ function fmtProcMem(p) {
   if (pct === null) return abs;
   var ps = pct.toFixed(1) + "%";
   return abs !== "" ? abs + " (" + ps + ")" : "(" + ps + ")";
+}
+
+function fmtRpm(v) {
+  if (typeof v !== "number" || !isFinite(v)) return "--";
+  return Math.round(v) + " RPM";
+}
+
+// Fans can't report why they spin, so name what each one reacts to: the
+// CPU fan follows CPU temp (board fan curve), the GPU fan its own GPU.
+// topProc is the busiest process ({comm, cpu}) or null.
+function cpuFanDriver(s, topProc) {
+  var v = s || {};
+  var parts = ["CPU " + fmtTemp(v.cpuTemp) + " · " + fmtPct(v.cpu) + " load"];
+  if (topProc && topProc.comm && typeof topProc.cpu === "number" && topProc.cpu >= 1)
+    parts.push("top: " + topProc.comm + " " + fmtPct(topProc.cpu));
+  return parts.join(" · ");
+}
+
+function gpuFanDriver(s) {
+  var v = s || {};
+  return "GPU " + fmtTemp(v.gpuTemp) + " · " + fmtPct(v.gpu) + " load";
+}
+
+// Which fan works hardest right now, as % of its range: "cpu", "gpu" or
+// "" when no fan reading exists. GPU wins only when strictly busier.
+function loudestFan(s) {
+  var v = s || {};
+  var c = typeof v.cpuFanDuty === "number" ? v.cpuFanDuty : null;
+  var g = typeof v.gpuFan === "number" ? v.gpuFan : null;
+  if (c === null && g === null) return "";
+  if (c === null) return "gpu";
+  if (g === null) return "cpu";
+  return g > c ? "gpu" : "cpu";
 }
 
 // Map a value in [min,max] to a Y pixel in [0,height] (0 = top).
@@ -221,6 +269,10 @@ if (typeof module !== "undefined") {
     fmtPct: fmtPct,
     fmtTemp: fmtTemp,
     fmtMemDetail: fmtMemDetail,
+    fmtRpm: fmtRpm,
+    cpuFanDriver: cpuFanDriver,
+    gpuFanDriver: gpuFanDriver,
+    loudestFan: loudestFan,
     shortCpuName: shortCpuName,
     cpuTitle: cpuTitle,
     gpuTitle: gpuTitle,
@@ -228,6 +280,7 @@ if (typeof module !== "undefined") {
     parseProcess: parseProcess,
     parseProcesses: parseProcesses,
     sortProcesses: sortProcesses,
+    filterProcesses: filterProcesses,
     fmtProcMem: fmtProcMem,
     yFor: yFor,
     xFor: xFor

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # wartafak.sysmon stats collector
-# Prints one JSON line: cpu%, cpu_temp, gpu%, gpu_temp, gpu vendor/name, mem%, mem details
+# Prints one JSON line: cpu%, cpu_temp, gpu%, gpu_temp, gpu fan%, gpu vendor/name, mem%, mem details,
+# cpu fan rpm + duty%
 # All temps in Celsius. Nullable fields are emitted as null when unavailable.
 set -u
 
@@ -93,6 +94,36 @@ cpu_meta() {
   printf '%s\t%s\t%s\n' "$model" "$threads" "$maxghz"
 }
 
+# CPU fan from the motherboard Super I/O (nct668x / nct6775 / it87):
+# prints "rpm<TAB>duty%". Prefers a fan labeled "CPU"; else fan1, which is
+# the CPU_FAN header on these chips. Duty is pwmN/255 of the same header.
+cpu_fan() {
+  local rpm="null" duty="null" h n f l idx=""
+  for h in /sys/class/hwmon/hwmon*; do
+    n="$(cat "$h/name" 2>/dev/null)"
+    case "$n" in nct6683|nct6686|nct6687|nct67*|nct6775|nct6779|nct6798|it87*) ;; *) continue ;; esac
+    for l in "$h"/fan*_label; do
+      [ -f "$l" ] || continue
+      if grep -qi "cpu" "$l" 2>/dev/null; then
+        idx="$(basename "$l")"; idx="${idx#fan}"; idx="${idx%_label}"
+        break
+      fi
+    done
+    [ -n "$idx" ] || idx=1
+    f="$h/fan${idx}_input"
+    [ -f "$f" ] || { idx=""; continue; }
+    rpm="$(tr -dc '0-9' < "$f" 2>/dev/null)"
+    [ -n "$rpm" ] || rpm="null"
+    if [ -f "$h/pwm$idx" ]; then
+      local raw
+      raw="$(tr -dc '0-9' < "$h/pwm$idx" 2>/dev/null)"
+      [ -n "$raw" ] && duty="$(awk -v v="$raw" 'BEGIN{printf "%.0f", v*100/255}')"
+    fi
+    break
+  done
+  printf '%s\t%s\n' "$rpm" "$duty"
+}
+
 # Shorten a verbose lspci VGA line to "Vendor Model", e.g.
 # "Advanced Micro Devices, Inc. [AMD/ATI] Navi 23 [Radeon RX 6650 XT / 6700S / 6800S] (rev c1)"
 # -> "AMD Radeon RX 6650 XT"
@@ -113,22 +144,24 @@ gpu_short_from_lspci() {
 }
 
 gpu_info() {
-  local usage="null" temp="null" vendor="none" name="" short="" pci_line=""
+  local usage="null" temp="null" fan="null" vendor="none" name="" short="" pci_line=""
   pci_line="$(lspci 2>/dev/null | grep -i -m1 'vga\|3d controller')"
 
   # --- NVIDIA ---
   if command -v nvidia-smi >/dev/null 2>&1; then
     local out
-    if out="$(nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,name --format=csv,noheader,nounits 2>/dev/null | head -n 1)" \
+    if out="$(nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,fan.speed,name --format=csv,noheader,nounits 2>/dev/null | head -n 1)" \
       && [ -n "$out" ] \
       && echo "$out" | grep -qE '^[[:space:]]*[0-9]+(\.[0-9]+)?[[:space:]]*,[[:space:]]*[0-9]+(\.[0-9]+)?[[:space:]]*,'; then
       vendor="nvidia"
       usage="$(echo "$out" | cut -d',' -f1 | tr -dc '0-9.')"
       temp="$(echo "$out" | cut -d',' -f2 | tr -dc '0-9.')"
-      name="$(echo "$out" | cut -d',' -f3- | sed 's/^ //')"
+      fan="$(echo "$out" | cut -d',' -f3 | tr -dc '0-9.')"
+      name="$(echo "$out" | cut -d',' -f4- | sed 's/^ //')"
       short="$name"
       [ -z "$usage" ] && usage="null"
       [ -z "$temp" ] && temp="null"
+      [ -z "$fan" ] && fan="null"
     fi
   fi
 
@@ -192,13 +225,14 @@ gpu_info() {
   # JSON-escape the names (strip quotes/backslashes)
   name="$(printf '%s' "$name" | tr -d '"\\' | head -c 80)"
   short="$(printf '%s' "$short" | tr -d '"\\' | head -c 60)"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$usage" "$temp" "$vendor" "$name" "$short"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$usage" "$temp" "$fan" "$vendor" "$name" "$short"
 }
 
 CPU="$(cpu_usage)"
 CTEMP="$(cpu_temp)"
 read -r MEM_PCT MEM_USED MEM_TOTAL <<< "$(mem_info)"
-IFS=$'\t' read -r GPU GPU_TEMP GPU_VENDOR GPU_NAME GPU_SHORT <<< "$(gpu_info)"
+IFS=$'\t' read -r GPU GPU_TEMP GPU_FAN GPU_VENDOR GPU_NAME GPU_SHORT <<< "$(gpu_info)"
+IFS=$'\t' read -r CPU_FAN CPU_FAN_DUTY <<< "$(cpu_fan)"
 IFS=$'\t' read -r CPU_MODEL CPU_THREADS CPU_MAXGHZ <<< "$(cpu_meta)"
 
 # numbers or null must be emitted raw; strings quoted
@@ -212,5 +246,5 @@ IFS=$'\t' read -r CPU_MODEL CPU_THREADS CPU_MAXGHZ <<< "$(cpu_meta)"
 [ "$CPU_THREADS" = "null" ] || CPU_THREADS="$CPU_THREADS"
 [ "$CPU_MAXGHZ" = "null" ] || CPU_MAXGHZ="$CPU_MAXGHZ"
 
-printf '{"cpu":%s,"cpu_temp":%s,"gpu":%s,"gpu_temp":%s,"gpu_vendor":"%s","gpu_name":"%s","gpu_short":"%s","cpu_model":"%s","cpu_threads":%s,"cpu_max_ghz":%s,"mem":%s,"mem_used_kb":%s,"mem_total_kb":%s}\n' \
-  "$CPU" "$CTEMP" "$GPU" "$GPU_TEMP" "$GPU_VENDOR" "$GPU_NAME" "$GPU_SHORT" "$CPU_MODEL" "$CPU_THREADS" "$CPU_MAXGHZ" "$MEM_PCT" "$MEM_USED" "$MEM_TOTAL"
+printf '{"cpu":%s,"cpu_temp":%s,"gpu":%s,"gpu_temp":%s,"gpu_fan":%s,"gpu_vendor":"%s","gpu_name":"%s","gpu_short":"%s","cpu_model":"%s","cpu_threads":%s,"cpu_max_ghz":%s,"mem":%s,"mem_used_kb":%s,"mem_total_kb":%s,"cpu_fan_rpm":%s,"cpu_fan_duty":%s}\n' \
+  "$CPU" "$CTEMP" "$GPU" "$GPU_TEMP" "$GPU_FAN" "$GPU_VENDOR" "$GPU_NAME" "$GPU_SHORT" "$CPU_MODEL" "$CPU_THREADS" "$CPU_MAXGHZ" "$MEM_PCT" "$MEM_USED" "$MEM_TOTAL" "$CPU_FAN" "$CPU_FAN_DUTY"

@@ -337,3 +337,58 @@ describe("fmtProcMem", () => {
     assert.equal(M.fmtProcMem(null), "--")
   })
 })
+
+describe("fans", () => {
+  it("parseStats reads fan fields and nulls them when absent", () => {
+    const s = M.parseStats(JSON.stringify({ cpu_fan_rpm: 1574, cpu_fan_duty: 76, gpu_fan: 30 }))
+    assert.equal(s.cpuFanRpm, 1574)
+    assert.equal(s.cpuFanDuty, 76)
+    assert.equal(s.gpuFan, 30)
+    const e = M.parseStats("{}")
+    assert.equal(e.cpuFanRpm, null)
+    assert.equal(e.gpuFan, null)
+    assert.equal(M.parseStats("garbage").cpuFanDuty, null)
+  })
+  it("fmtRpm", () => {
+    assert.equal(M.fmtRpm(1573.6), "1574 RPM")
+    assert.equal(M.fmtRpm(null), "--")
+  })
+  it("cpuFanDriver names temp, load and busiest process", () => {
+    const s = { cpuTemp: 73, cpu: 45 }
+    assert.equal(M.cpuFanDriver(s, { comm: "cargo", cpu: 30 }), "CPU 73° · 45% load · top: cargo 30%")
+    assert.equal(M.cpuFanDriver(s, { comm: "idle", cpu: 0.2 }), "CPU 73° · 45% load")
+    assert.equal(M.cpuFanDriver(s, null), "CPU 73° · 45% load")
+  })
+  it("gpuFanDriver", () => {
+    assert.equal(M.gpuFanDriver({ gpuTemp: 60, gpu: 80 }), "GPU 60° · 80% load")
+  })
+  it("loudestFan", () => {
+    assert.equal(M.loudestFan({}), "")
+    assert.equal(M.loudestFan({ cpuFanDuty: 50, gpuFan: null }), "cpu")
+    assert.equal(M.loudestFan({ cpuFanDuty: null, gpuFan: 20 }), "gpu")
+    assert.equal(M.loudestFan({ cpuFanDuty: 50, gpuFan: 50 }), "cpu")
+    assert.equal(M.loudestFan({ cpuFanDuty: 40, gpuFan: 60 }), "gpu")
+  })
+})
+
+describe("filterProcesses", () => {
+  const list = [
+    { pid: 1377, comm: "Hyprland" },
+    { pid: 21331, comm: "claude" },
+    { pid: 13, comm: "kworker" }
+  ]
+  it("keeps everything for a blank query", () => {
+    assert.equal(M.filterProcesses(list, "  ").length, 3)
+    assert.notEqual(M.filterProcesses(list, ""), list)
+  })
+  it("matches names case-insensitively", () => {
+    assert.deepEqual(M.filterProcesses(list, "hypr").map(p => p.pid), [1377])
+  })
+  it("matches pid prefixes, not substrings", () => {
+    assert.deepEqual(M.filterProcesses(list, "13").map(p => p.pid), [1377, 13])
+    assert.deepEqual(M.filterProcesses(list, "33").map(p => p.pid), [])
+  })
+  it("tolerates junk", () => {
+    assert.deepEqual(M.filterProcesses(null, "x"), [])
+  })
+})
