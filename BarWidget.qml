@@ -67,6 +67,21 @@ BarWidget {
   // still name what is heating the CPU.
   readonly property int procIdlePollMs: 10000
 
+  // ---- storage ----
+  // df reads filesystem counters, so the bar polls it cheaply. The folder
+  // scan walks every file: it runs only when the Storage tab opens, and the
+  // last result stays on screen until a new one arrives.
+  property var volumes: []
+  readonly property var primaryVolume: Model.primaryVolume(volumes)
+  property var scanResult: null
+  property bool scanFailed: false
+  // Set only once a scan outlasts scanHintMs, so fast scans never flash.
+  property bool scanSlow: false
+  readonly property int storagePollMs: 60000
+  readonly property int scanHintMs: 300
+  readonly property string storageHelperPath: (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/wartafak.sysmon/storage.sh"
+  readonly property string scanHelperPath: (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/wartafak.sysmon/scan.sh"
+
   // ---- theme palette (dynamic) ----
   // qs.Commons.Color only exposes foreground/background/accent/urgent/
   // muted, so read the active theme's full palette for the temp + memory
@@ -74,24 +89,27 @@ BarWidget {
   property color themeTemp: "#e0af68"
   property color themeGreen: "#9ece6a"
   property color themePurple: "#ad8ee6"
+  property color themeCyan: "#449dab"
 
   function loadThemePalette(raw) {
-    var yellow = "", orange = "", green = "", magenta = "", purple = ""
+    var yellow = "", orange = "", green = "", magenta = "", purple = "", cyan = ""
     var lines = String(raw || "").split("\n")
     for (var i = 0; i < lines.length; i++) {
-      var m = lines[i].match(/^\s*(yellow|orange|green|magenta|purple)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
+      var m = lines[i].match(/^\s*(yellow|orange|green|magenta|purple|cyan)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
       if (!m) continue
       if (m[1] === "yellow") yellow = m[2]
       else if (m[1] === "orange") orange = m[2]
       else if (m[1] === "green") green = m[2]
       else if (m[1] === "magenta") magenta = m[2]
       else if (m[1] === "purple") purple = m[2]
+      else if (m[1] === "cyan") cyan = m[2]
     }
     // Yellow first: it preserves the established temp look on themes like
     // tokyo-night whose yellow is this orange-yellow.
     root.themeTemp = yellow || orange || "#e0af68"
     root.themeGreen = green || "#9ece6a"
     root.themePurple = magenta || purple || "#ad8ee6"
+    root.themeCyan = cyan || "#449dab"
   }
 
   property FileView themeColorsFile: FileView {
@@ -115,6 +133,30 @@ BarWidget {
       procProc.command = ["bash", procHelperPath]
       procProc.running = true
     }
+  }
+
+  function refreshStorage() {
+    if (!storageProc.running) {
+      storageProc.command = ["bash", storageHelperPath]
+      storageProc.running = true
+    }
+  }
+
+  function startScan() {
+    if (scanProc.running) return
+    root.scanFailed = false
+    root.scanSlow = false
+    scanHint.restart()
+    scanProc.command = ["bash", scanHelperPath]
+    scanProc.running = true
+  }
+
+  function applyScan(raw) {
+    scanHint.stop()
+    root.scanSlow = false
+    var result = Model.parseScan(raw)
+    if (result) root.scanResult = result
+    root.scanFailed = !result
   }
 
   function applyProcesses(raw) {
@@ -178,6 +220,7 @@ BarWidget {
     if (root.hasGpu)
       parts.push(" " + Model.fmtPct(root.gpu) + " " + Model.fmtTemp(root.gpuTemp))
     parts.push(" " + Model.fmtPct(root.mem))
+    parts.push("\uDB80\uDECA " + Model.fmtBarUsed(root.primaryVolume))
     // Fan: the hardest-working one, CPU duty or GPU fan %.
     if (root.loudestFan === "gpu")
       parts.push("\uDB80\uDE10 " + Model.fmtPct(root.gpuFan) + " GPU")
@@ -194,6 +237,7 @@ BarWidget {
       lines.push("GPU  " + Model.fmtPct(root.gpu) + "  " + Model.fmtTemp(root.gpuTemp)
         + "   (avg " + Model.fmtPct(root.gpuAvg) + "  " + Model.fmtTemp(root.gpuTempAvg) + ")")
     lines.push("MEM  " + Model.fmtPct(root.mem) + "   (avg " + Model.fmtPct(root.memAvg) + ")")
+    lines.push("DISK " + (root.primaryVolume ? Model.fmtPct(root.primaryVolume.pct) + "   " : " ") + Model.fmtVolumeDetail(root.primaryVolume))
     if (root.hasCpuFan) {
       lines.push("")
       lines.push("CPU FAN  " + Model.fmtRpm(root.cpuFanRpm) + "  " + Model.fmtPct(root.cpuFanDuty)
@@ -239,7 +283,10 @@ BarWidget {
       sampleCount: root.sampleCount,
       cpuHistLen: root.cpuHist ? root.cpuHist.length : 0,
       memHistLen: root.memHist ? root.memHist.length : 0,
-      processCount: root.processCount
+      processCount: root.processCount,
+      volumes: root.volumes,
+      scanFolders: root.scanResult ? root.scanResult.folders.length : 0,
+      scanFailed: root.scanFailed
     })
   }
 
@@ -294,6 +341,20 @@ BarWidget {
     onTriggered: root.refreshProcesses()
   }
 
+  Timer {
+    interval: root.storagePollMs
+    running: true
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: root.refreshStorage()
+  }
+
+  Timer {
+    id: scanHint
+    interval: root.scanHintMs
+    onTriggered: root.scanSlow = true
+  }
+
   Process {
     id: statsProc
     stdout: StdioCollector {
@@ -307,6 +368,22 @@ BarWidget {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyProcesses(text)
+    }
+  }
+
+  Process {
+    id: storageProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.volumes = Model.parseVolumes(text)
+    }
+  }
+
+  Process {
+    id: scanProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyScan(text)
     }
   }
 
@@ -353,8 +430,10 @@ BarWidget {
     horizontalMargin: 8.75
     verticalPadding: 8.75
     onPressed: function(b) {
-      if (b === Qt.RightButton) root.refresh()
-      else root.togglePanel()
+      if (b === Qt.RightButton) {
+        root.refresh()
+        root.refreshStorage()
+      } else root.togglePanel()
     }
   }
 }

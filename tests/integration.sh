@@ -96,6 +96,27 @@ pcheck 'all(d[i]["cpu"] is None or d[i+1]["cpu"] is None or d[i]["cpu"] >= d[i+1
 echo "$PRAW" | node -e 'let t="";process.stdin.on("data",c=>t+=c).on("end",()=>{const M=require("'"$DIR"'/Model.js");const l=M.parseProcesses(t);if(!Array.isArray(l)||l.length===0){console.error("empty");process.exit(1)}})' 2>/dev/null \
   && ok "Model.js parses live processes.sh output" || fail "Model.js parses live processes.sh output"
 
+# --- Part A2b: storage.sh + scan.sh (no shell needed) ---
+
+SRAW="$("$DIR/storage.sh" 2>/dev/null)"
+[ $? -eq 0 ] && [ -n "$SRAW" ] && ok "storage.sh exits 0 with output" || fail "storage.sh exits 0 with output"
+
+scheck() { CHECK_EXPR="$1" python3 -c 'import json,sys,os; d=json.load(sys.stdin); assert eval(os.environ["CHECK_EXPR"])' <<< "$SRAW" 2>/dev/null; }
+
+scheck 'isinstance(d, list) and len(d) > 0' \
+  && ok "storage.sh prints a non-empty JSON array" || fail "storage.sh prints a non-empty JSON array"
+scheck 'all(set(v) == {"mount","fstype","encrypted","size","used","avail","pct","shared"} for v in d)' \
+  && ok "volumes have the expected keys" || fail "volumes have the expected keys"
+scheck 'all(v["used"] <= v["size"] and v["avail"] <= v["size"] and 0 <= v["pct"] <= 100 for v in d)' \
+  && ok "volume sizes in range" || fail "volume sizes in range"
+scheck 'len({v["mount"] for v in d}) == len(d)' \
+  && ok "one entry per mount" || fail "one entry per mount"
+
+SCRAW="$("$DIR/scan.sh" 2>/dev/null)"
+[ $? -eq 0 ] && [ -n "$SCRAW" ] && ok "scan.sh exits 0 with output" || fail "scan.sh exits 0 with output"
+echo "$SCRAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); f=d["folders"]; assert f and d["total"] == sum(x["bytes"] for x in f) and all(f[i]["bytes"] >= f[i+1]["bytes"] for i in range(len(f)-1))' 2>/dev/null \
+  && ok "scan.sh folders sum to total, biggest first" || fail "scan.sh folders sum to total, biggest first"
+
 # --- Part A3: killproc.sh validation (no shell needed) ---
 
 "$DIR/killproc.sh" TERM abc >/dev/null 2>&1; [ $? -eq 2 ] \

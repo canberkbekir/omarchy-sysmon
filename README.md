@@ -21,6 +21,7 @@ Top bar (`BarWidget.qml`):
 
 - Compact CPU / GPU / memory usage plus temperatures; the GPU readout
   hides itself when no GPU is detected
+- Disk usage on `/` (`13%`), with a ` !` once the disk is 90% full
 - Fan readout: the hardest-working fan (CPU fan duty or GPU fan %)
 - Hover tooltip with current values, 10-minute averages, and what each
   fan is reacting to (temperature, load, busiest process)
@@ -32,12 +33,14 @@ Popup (`Panel.qml`), split into tabs so nothing needs scrolling:
   card to open its tab), a "loudest fan" banner, and the top 5 processes
 - **CPU / GPU / MEM**: current value, average, and history graphs, the
   fan that cools it, and the top processes
+- **Storage**: used / free / total per volume, colored at 80% and 90%
+  full, plus the biggest folders in your home directory
 - **Fans**: CPU fan RPM + duty and GPU fan %, each with history and the
   component driving it
 - **Procs**: full process list with a name/PID filter, sortable by
   process, PID, CPU, or memory; click a PID to copy it; TERM / KILL
 - Time range buttons (10s / 1m / 5m / 10m) for every graph and average
-- Keys: `1`–`6` or `←`/`→` switch tabs, `[` / `]` change the range,
+- Keys: `1`–`7` or `←`/`→` switch tabs, `[` / `]` change the range,
   `/` filters processes, `Esc` closes
 - Theme-aware colors following the active Omarchy theme
 
@@ -61,6 +64,10 @@ Under the hood:
 - `stats.sh` polls system stats every 2s; `processes.sh` samples the
   process list every 2s while the popup is open, and every 10s otherwise
   (for the tooltip's busiest process)
+- `storage.sh` reads `df` every 60s and whenever the Storage tab opens; it
+  scans nothing. `scan.sh` walks your home folders only when the Storage
+  tab opens, at the lowest CPU and disk priority (`dua`, falling back to
+  `du`), and the last result stays on screen until the new one arrives
 - Shared `Model.js`: all parsing, formatting, and ordering as pure,
   unit-tested functions (`node --test tests/`, no dependencies)
 - `./tests/integration.sh`: live end-to-end test via shell IPC
@@ -119,6 +126,8 @@ omarchy plugin remove wartafak.sysmon
   and the sortable process table (plus the `↓ PROCESSES` jump anchor)
 - `stats.sh` — 2s collector, prints one JSON line per poll
 - `processes.sh` — 2s process sampler (while open), prints one JSON array
+- `storage.sh` — `df` reader, prints one JSON array of volumes
+- `scan.sh` — home folder sizes, prints one JSON object
 - `killproc.sh` — validated `TERM|KILL <pid>` helper for the table buttons
 - `Model.js` — pure helpers (parsing, history, formatting, graph mapping,
   process parse/sort), shared by QML and the unit tests

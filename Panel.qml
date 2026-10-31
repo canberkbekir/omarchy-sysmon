@@ -6,8 +6,8 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// wartafak.sysmon popup: tabbed (Overview / CPU / GPU / Memory / Fans /
-// Processes) so every view fits without scrolling; only the process list
+// wartafak.sysmon popup: tabbed (Overview / CPU / GPU / Memory / Storage /
+// Fans / Processes) so every view fits without scrolling; only the process list
 // scrolls. Live data and histories live on the host BarWidget
 // (hostWidget); this panel only renders them.
 Panel {
@@ -26,6 +26,7 @@ Panel {
   readonly property color tempColor: hostWidget ? hostWidget.themeTemp : "#e0af68"
   readonly property color memColor: hostWidget ? hostWidget.themeGreen : "#9ece6a"
   readonly property color headerColor: hostWidget ? hostWidget.themePurple : "#ad8ee6"
+  readonly property color storageColor: hostWidget ? hostWidget.themeCyan : "#449dab"
 
   readonly property bool hasGpu: hostWidget ? hostWidget.hasGpu : false
   readonly property bool hasCpuFan: hostWidget ? hostWidget.hasCpuFan : false
@@ -40,9 +41,18 @@ Panel {
     var list = [{ id: "overview", label: "OVERVIEW" }, { id: "cpu", label: "CPU" }]
     if (hasGpu) list.push({ id: "gpu", label: "GPU" })
     list.push({ id: "memory", label: "MEM" })
+    list.push({ id: "storage", label: "STORAGE" })
     if (hasFans) list.push({ id: "fans", label: "FANS" })
     list.push({ id: "procs", label: "PROCS " + (hostWidget ? hostWidget.processCount : 0) })
     return list
+  }
+
+  // Fresh numbers on every visit; the folder scan runs only from here.
+  onCurrentTabChanged: {
+    if (root.currentTab === "storage" && hostWidget) {
+      hostWidget.refreshStorage()
+      hostWidget.startScan()
+    }
   }
 
   function tabIndex(id) {
@@ -92,6 +102,12 @@ Panel {
     var secs = Math.min(n * 2, root.rangeSec)
     var mm = Math.floor(secs / 60), ss = secs % 60
     return "LAST " + mm + "M " + (ss < 10 ? "0" + ss : ss) + "S · 2S SAMPLES"
+  }
+
+  function levelColor(pct) {
+    var level = Model.storageLevel(pct)
+    if (level === "critical") return Color.urgent
+    return level === "warning" ? root.tempColor : root.storageColor
   }
 
   function cpuHeader() {
@@ -152,6 +168,16 @@ Panel {
     root.rangeSec = r[Math.max(0, Math.min(r.length - 1, i + delta))]
   }
 
+  // ---- storage state (data lives on hostWidget) ----
+  // Three cards fit without scrolling.
+  readonly property var allVolumes: hostWidget ? hostWidget.volumes : []
+  readonly property var shownVolumes: allVolumes.slice(0, 3)
+  readonly property var mainVolume: hostWidget ? hostWidget.primaryVolume : null
+  readonly property var scanResult: hostWidget ? hostWidget.scanResult : null
+  readonly property var topFolders: scanResult ? scanResult.folders.slice(0, 5) : []
+  readonly property bool scanFailed: hostWidget ? hostWidget.scanFailed : false
+  readonly property bool scanSlow: hostWidget ? hostWidget.scanSlow : false
+
   // ---- process table state (raw list lives on hostWidget) ----
   property string procSortKey: "cpu"
   property int procSortDir: -1
@@ -201,9 +227,9 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(520))
-    contentHeight: panel.fittedContentHeight(Style.space(560), Style.space(600))
+    contentHeight: panel.fittedContentHeight(Style.space(625), Style.space(665))
 
-    // Left/Right (h/l) and 1–6 switch tabs, "/" jumps to the process
+    // Left/Right (h/l) and 1–7 switch tabs, "/" jumps to the process
     // filter; Tab keeps switching between bar panels. Typing in the
     // filter blocks all of this.
     PanelKeyCatcher {
@@ -231,7 +257,7 @@ Panel {
         PanelHero {
           Layout.fillWidth: true
           title: "System Monitor"
-          meta: root.windowTitle()
+          meta: root.currentTab === "storage" ? "UPDATES EVERY 60S" : root.windowTitle()
           foreground: root.contentForeground
           fontFamily: root.contentFontFamily
         }
@@ -263,10 +289,11 @@ Panel {
         }
 
         // ---------- Time range ----------
-        // Window for every graph and AVG value; hidden on Processes.
+        // Window for every graph and AVG value; hidden on the tabs with
+        // neither (Storage, Processes).
         RowLayout {
           Layout.fillWidth: true
-          visible: root.currentTab !== "procs"
+          visible: root.currentTab !== "procs" && root.currentTab !== "storage"
           spacing: Style.space(6)
 
           Text {
@@ -354,6 +381,89 @@ Panel {
                 history: !hostWidget ? []
                   : root.win(hostWidget.loudestFan === "gpu" ? hostWidget.gpuFanHist : hostWidget.cpuFanHist)
                 target: "fans"
+              }
+            }
+
+            // Storage strip: a bar, not a sparkline. Disk usage barely moves
+            // inside a graph window.
+            Rectangle {
+              width: parent.width
+              implicitHeight: stripCol.implicitHeight + Style.space(16)
+              height: implicitHeight
+              radius: Style.cornerRadius
+              color: stripMouse.containsMouse
+                ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.09)
+                : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.05)
+              border.width: 1
+              border.color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.12)
+
+              MouseArea {
+                id: stripMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.selectTab("storage")
+              }
+
+              Column {
+                id: stripCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.topMargin: Style.space(8)
+                anchors.leftMargin: Style.space(10)
+                anchors.rightMargin: Style.space(10)
+                spacing: Style.space(2)
+
+                Item {
+                  width: parent.width
+                  height: stripTitle.implicitHeight
+                  Text {
+                    id: stripTitle
+                    textFormat: Text.PlainText
+                    text: "STORAGE"
+                    color: root.mutedForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+                  Text {
+                    anchors.right: parent.right
+                    textFormat: Text.PlainText
+                    text: "details ›"
+                    color: root.mutedForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Item {
+                  width: parent.width
+                  height: stripValue.implicitHeight
+                  Text {
+                    id: stripValue
+                    textFormat: Text.PlainText
+                    text: root.mainVolume ? Model.fmtPct(root.mainVolume.pct) : "--"
+                    color: root.levelColor(root.mainVolume ? root.mainVolume.pct : null)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.title
+                    font.bold: true
+                  }
+                  Text {
+                    anchors.right: parent.right
+                    anchors.baseline: stripValue.baseline
+                    textFormat: Text.PlainText
+                    text: Model.fmtVolumeDetail(root.mainVolume)
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                  }
+                }
+
+                UsageBar {
+                  fraction: root.mainVolume ? Model.fraction(root.mainVolume.pct, 100) : 0
+                  barColor: root.levelColor(root.mainVolume ? root.mainVolume.pct : null)
+                }
               }
             }
 
@@ -534,6 +644,98 @@ Panel {
               rows: root.topByMem.slice(0, 6)
               showMem: true
               memOnly: true
+            }
+          }
+
+          // ===== Storage =====
+          Column {
+            anchors.fill: parent
+            spacing: Style.space(8)
+            visible: root.currentTab === "storage"
+
+            PanelSectionHeader {
+              text: "STORAGE · " + root.allVolumes.length + (root.allVolumes.length === 1 ? " VOLUME" : " VOLUMES")
+              width: parent.width
+              foreground: root.headerColor
+              fontFamily: root.contentFontFamily
+            }
+
+            Text {
+              visible: root.allVolumes.length === 0
+              textFormat: Text.PlainText
+              text: "not available"
+              color: root.mutedForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+              model: root.shownVolumes
+              VolumeCard {}
+            }
+
+            // Scan header: "Scanning…" once slow, RETRY after a failure,
+            // otherwise the total.
+            Item {
+              width: parent.width
+              height: Math.max(folderTitle.implicitHeight, retryBtn.visible ? retryBtn.implicitHeight : 0)
+              PanelSectionHeader {
+                id: folderTitle
+                text: "BIGGEST FOLDERS IN ~"
+                anchors.verticalCenter: parent.verticalCenter
+                foreground: root.headerColor
+                fontFamily: root.contentFontFamily
+              }
+              Text {
+                visible: !root.scanFailed
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: root.scanSlow ? "Scanning…" : root.scanResult ? Model.fmtBytes(root.scanResult.total) + " total" : ""
+                color: root.scanSlow ? root.storageColor : root.mutedForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+              Button {
+                id: retryBtn
+                visible: root.scanFailed
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: "RETRY"
+                fontFamily: root.contentFontFamily
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(8)
+                verticalPadding: Style.space(2)
+                onClicked: { if (hostWidget) hostWidget.startScan() }
+              }
+            }
+
+            Repeater {
+              model: root.topFolders
+              FolderRow {}
+            }
+
+            // First scan: placeholder rows until results exist.
+            Repeater {
+              model: !root.scanResult && !root.scanFailed ? 5 : 0
+              Rectangle {
+                width: parent ? parent.width : 0
+                height: Style.space(8)
+                radius: height / 2
+                color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.10)
+              }
+            }
+
+            Text {
+              visible: root.scanFailed
+              width: parent.width
+              textFormat: Text.PlainText
+              text: root.scanResult ? "Scan failed · showing the last saved results" : "Scan failed"
+              color: Color.urgent
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
             }
           }
 
@@ -800,6 +1002,184 @@ Panel {
         lineColor: card.lineColor
         graphHeight: Style.space(36)
       }
+    }
+  }
+
+  // Thin horizontal usage bar; the fill covers fraction (0–1) of the width.
+  component UsageBar: Rectangle {
+    id: usageBar
+    property real fraction: 0
+    property color barColor: root.storageColor
+
+    width: parent ? parent.width : 0
+    height: Style.space(6)
+    radius: height / 2
+    color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.12)
+
+    Rectangle {
+      anchors.left: parent.left
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      width: Math.max(usageBar.fraction > 0 ? usageBar.height : 0, parent.width * usageBar.fraction)
+      radius: parent.radius
+      color: usageBar.barColor
+    }
+  }
+
+  // One volume: mount + filesystem, percent + free space, usage bar,
+  // used/total, and the mounts that share its space.
+  component VolumeCard: Rectangle {
+    id: volumeCard
+    required property var modelData
+    readonly property var volume: modelData
+    readonly property color levelColor: root.levelColor(volume.pct)
+
+    width: parent ? parent.width : 0
+    implicitHeight: volumeCol.implicitHeight + Style.space(16)
+    height: implicitHeight
+    radius: Style.cornerRadius
+    color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.05)
+    border.width: 1
+    border.color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.12)
+
+    Column {
+      id: volumeCol
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.topMargin: Style.space(8)
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(4)
+
+      Item {
+        width: parent.width
+        height: mountText.implicitHeight
+        Text {
+          id: mountText
+          textFormat: Text.PlainText
+          text: volumeCard.volume.mount
+          color: root.contentForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+        Text {
+          anchors.right: parent.right
+          anchors.baseline: mountText.baseline
+          textFormat: Text.PlainText
+          text: Model.fmtVolumeMeta(volumeCard.volume)
+          color: root.mutedForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      Item {
+        width: parent.width
+        height: pctText.implicitHeight
+        Text {
+          id: pctText
+          textFormat: Text.PlainText
+          text: Model.fmtPct(volumeCard.volume.pct)
+          color: volumeCard.levelColor
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.title
+          font.bold: true
+        }
+        Text {
+          anchors.right: parent.right
+          anchors.baseline: pctText.baseline
+          textFormat: Text.PlainText
+          text: Model.fmtBytes(volumeCard.volume.avail) + " free"
+          color: root.contentForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+      }
+
+      UsageBar {
+        fraction: Model.fraction(volumeCard.volume.pct, 100)
+        barColor: volumeCard.levelColor
+      }
+
+      Item {
+        width: parent.width
+        height: usedText.implicitHeight
+        Text {
+          id: usedText
+          textFormat: Text.PlainText
+          text: Model.fmtBytes(volumeCard.volume.used) + " used"
+          color: root.contentForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          anchors.right: parent.right
+          textFormat: Text.PlainText
+          text: Model.fmtBytes(volumeCard.volume.size) + " total"
+          color: root.contentForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      Text {
+        visible: volumeCard.volume.shared.length > 0
+        width: parent.width
+        textFormat: Text.PlainText
+        text: "Same space as " + volumeCard.volume.shared.join(", ")
+        color: root.mutedForeground
+        font.family: root.contentFontFamily
+        font.pixelSize: Style.font.caption
+        elide: Text.ElideRight
+      }
+    }
+  }
+
+  // One scanned folder: name, share of the home total, size.
+  component FolderRow: Item {
+    id: folderRow
+    required property var modelData
+
+    width: parent ? parent.width : 0
+    height: Math.max(folderName.implicitHeight, Style.space(20))
+
+    Text {
+      id: folderName
+      width: Style.space(120)
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
+      text: String(folderRow.modelData.name || "")
+      color: root.contentForeground
+      font.family: root.contentFontFamily
+      font.pixelSize: Style.font.body
+      elide: Text.ElideRight
+    }
+    Item {
+      anchors.left: folderName.right
+      anchors.right: folderSize.left
+      anchors.leftMargin: Style.space(8)
+      anchors.rightMargin: Style.space(8)
+      anchors.verticalCenter: parent.verticalCenter
+      height: Style.space(6)
+      UsageBar {
+        fraction: Model.fraction(folderRow.modelData.bytes, root.scanResult ? root.scanResult.total : 0)
+      }
+    }
+    Text {
+      id: folderSize
+      width: Style.space(64)
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      horizontalAlignment: Text.AlignRight
+      textFormat: Text.PlainText
+      text: Model.fmtBytes(folderRow.modelData.bytes)
+      color: root.contentForeground
+      font.family: root.contentFontFamily
+      font.pixelSize: Style.font.body
     }
   }
 

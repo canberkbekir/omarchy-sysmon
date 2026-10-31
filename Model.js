@@ -233,6 +233,124 @@ function fmtProcMem(p) {
   return abs !== "" ? abs + " (" + ps + ")" : "(" + ps + ")";
 }
 
+// One entry of storage.sh output. Null when the row is unusable (no mount,
+// no size) so a corrupt line can't poison the list.
+function parseVolume(o) {
+  if (!o || typeof o !== "object") return null;
+  var mount = typeof o.mount === "string" ? o.mount : "";
+  var size = numOrNull(o.size);
+  if (mount === "" || size === null || size <= 0) return null;
+  return {
+    mount: mount,
+    fstype: typeof o.fstype === "string" ? o.fstype : "",
+    encrypted: o.encrypted === true,
+    size: size,
+    used: numOrNull(o.used),
+    avail: numOrNull(o.avail),
+    pct: numOrNull(o.pct),
+    shared: Array.isArray(o.shared) ? o.shared.filter(function (m) { return typeof m === "string"; }) : []
+  };
+}
+
+function parseVolumes(raw) {
+  var arr;
+  try {
+    arr = JSON.parse(String(raw || ""));
+  } catch (e) {
+    return [];
+  }
+  if (!Array.isArray(arr)) return [];
+  var out = [];
+  for (var i = 0; i < arr.length; i++) {
+    var v = parseVolume(arr[i]);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+// The volume the bar and Overview report: / when present, else the first.
+function primaryVolume(list) {
+  var arr = Array.isArray(list) ? list : [];
+  for (var i = 0; i < arr.length; i++) if (arr[i].mount === "/") return arr[i];
+  return arr.length > 0 ? arr[0] : null;
+}
+
+// Null when the output is unusable, so the panel keeps its saved results.
+function parseScan(raw) {
+  var parsed;
+  try {
+    parsed = JSON.parse(String(raw || ""));
+  } catch (e) {
+    return null;
+  }
+  if (!parsed || !Array.isArray(parsed.folders)) return null;
+  var total = numOrNull(parsed.total);
+  if (total === null) return null;
+  var folders = [];
+  for (var i = 0; i < parsed.folders.length; i++) {
+    var f = parsed.folders[i];
+    var bytes = f ? numOrNull(f.bytes) : null;
+    if (bytes !== null && typeof f.name === "string" && f.name !== "")
+      folders.push({ name: f.name, bytes: bytes });
+  }
+  return folders.length > 0 ? { total: total, folders: folders } : null;
+}
+
+var STORAGE_WARN_PCT = 80;
+var STORAGE_CRIT_PCT = 90;
+
+// "normal", "warning", "critical" or "" when unknown.
+function storageLevel(pct) {
+  if (typeof pct !== "number" || !isFinite(pct)) return "";
+  if (pct >= STORAGE_CRIT_PCT) return "critical";
+  return pct >= STORAGE_WARN_PCT ? "warning" : "normal";
+}
+
+// Binary units, df -h style: value + unit, one decimal below 10 and for
+// terabytes (1.6 TB, 4.5 GB, 232 GB, 553 MB). "" when unknown.
+function byteParts(v) {
+  if (typeof v !== "number" || !isFinite(v) || v < 0) return null;
+  var units = [["T", 1099511627776], ["G", 1073741824], ["M", 1048576]];
+  for (var i = 0; i < units.length; i++) {
+    if (v >= units[i][1]) {
+      var n = v / units[i][1];
+      return { value: n.toFixed(n < 10 || i === 0 ? 1 : 0), unit: units[i][0] };
+    }
+  }
+  return { value: Math.round(v / 1024).toFixed(0), unit: "K" };
+}
+
+function fmtBytes(v) {
+  var p = byteParts(v);
+  return p ? p.value + " " + p.unit + "B" : "--";
+}
+
+// Bar readout: "13%", plus " !" when the disk is critically full (bar text
+// is one color, so it can't warn with color).
+function fmtBarUsed(volume) {
+  if (!volume) return "--";
+  return fmtPct(volume.pct) + (storageLevel(volume.pct) === "critical" ? " !" : "");
+}
+
+// "232 GB / 1.8 TB · 1.6 TB free"
+function fmtVolumeDetail(volume) {
+  if (!volume) return "not available";
+  return fmtBytes(volume.used) + " / " + fmtBytes(volume.size) + " · " + fmtBytes(volume.avail) + " free";
+}
+
+// "btrfs · encrypted"
+function fmtVolumeMeta(volume) {
+  if (!volume) return "";
+  return volume.fstype + (volume.encrypted ? " · encrypted" : "");
+}
+
+// Share of total as a 0–1 fraction for usage bars.
+function fraction(part, total) {
+  var p = Number(part), t = Number(total);
+  if (!isFinite(p) || !isFinite(t) || t <= 0 || p <= 0) return 0;
+  return Math.min(1, p / t);
+}
+
 function fmtRpm(v) {
   if (typeof v !== "number" || !isFinite(v)) return "--";
   return Math.round(v) + " RPM";
@@ -310,6 +428,16 @@ if (typeof module !== "undefined") {
     sortProcesses: sortProcesses,
     filterProcesses: filterProcesses,
     fmtProcMem: fmtProcMem,
+    parseVolume: parseVolume,
+    parseVolumes: parseVolumes,
+    primaryVolume: primaryVolume,
+    parseScan: parseScan,
+    storageLevel: storageLevel,
+    fmtBytes: fmtBytes,
+    fmtBarUsed: fmtBarUsed,
+    fmtVolumeDetail: fmtVolumeDetail,
+    fmtVolumeMeta: fmtVolumeMeta,
+    fraction: fraction,
     yFor: yFor,
     xFor: xFor
   };

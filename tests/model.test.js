@@ -417,3 +417,60 @@ describe("time ranges", () => {
     assert.equal(M.fmtRange(90), "90S")
   })
 })
+
+describe("storage", () => {
+  const raw = JSON.stringify([
+    { mount: "/boot", fstype: "vfat", encrypted: false, size: 2143281152, used: 579936256, avail: 1563344896, pct: 28, shared: [] },
+    { mount: "/", fstype: "btrfs", encrypted: true, size: 1998232485888, used: 248842874880, avail: 1747522605056, pct: 13, shared: ["/home"] },
+    { mount: "", size: 10 },
+    null
+  ])
+
+  it("parses volumes and drops unusable rows", () => {
+    assert.equal(M.parseVolumes(raw).length, 2)
+    assert.deepEqual(M.parseVolumes("garbage"), [])
+    assert.deepEqual(M.parseVolumes(""), [])
+  })
+  it("prefers / as the primary volume", () => {
+    assert.equal(M.primaryVolume(M.parseVolumes(raw)).mount, "/")
+    assert.equal(M.primaryVolume([{ mount: "/data" }]).mount, "/data")
+    assert.equal(M.primaryVolume([]), null)
+  })
+  it("formats bytes in df-style binary units", () => {
+    assert.equal(M.fmtBytes(1747522605056), "1.6 TB")
+    assert.equal(M.fmtBytes(248842874880), "232 GB")
+    assert.equal(M.fmtBytes(4778151936), "4.5 GB")
+    assert.equal(M.fmtBytes(579936256), "553 MB")
+    assert.equal(M.fmtBytes(null), "--")
+  })
+  it("maps usage to warning levels at 80 and 90", () => {
+    assert.equal(M.storageLevel(13), "normal")
+    assert.equal(M.storageLevel(80), "warning")
+    assert.equal(M.storageLevel(90), "critical")
+    assert.equal(M.storageLevel(null), "")
+  })
+  it("builds the bar readout, marking a critical disk", () => {
+    const root = M.primaryVolume(M.parseVolumes(raw))
+    assert.equal(M.fmtBarUsed(root), "13%")
+    assert.equal(M.fmtBarUsed({ pct: 94 }), "94% !")
+    assert.equal(M.fmtBarUsed(null), "--")
+  })
+  it("describes a volume", () => {
+    const root = M.primaryVolume(M.parseVolumes(raw))
+    assert.equal(M.fmtVolumeDetail(root), "232 GB / 1.8 TB · 1.6 TB free")
+    assert.equal(M.fmtVolumeMeta(root), "btrfs · encrypted")
+    assert.equal(M.fmtVolumeDetail(null), "not available")
+  })
+  it("parses scans, rejecting unusable output", () => {
+    const scan = M.parseScan(JSON.stringify({ total: 30, folders: [{ name: "a", bytes: 20 }, { name: "", bytes: 10 }] }))
+    assert.deepEqual(scan, { total: 30, folders: [{ name: "a", bytes: 20 }] })
+    assert.equal(M.parseScan("garbage"), null)
+    assert.equal(M.parseScan(JSON.stringify({ total: 0, folders: [] })), null)
+  })
+  it("clamps fractions", () => {
+    assert.equal(M.fraction(25, 100), 0.25)
+    assert.equal(M.fraction(200, 100), 1)
+    assert.equal(M.fraction(5, 0), 0)
+    assert.equal(M.fraction(null, 100), 0)
+  })
+})
