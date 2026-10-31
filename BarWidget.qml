@@ -184,6 +184,14 @@ BarWidget {
     copyProc.running = true
   }
 
+  // Copy a scanned folder's absolute path, same way as copyPid.
+  function copyFolderPath(name) {
+    var path = Model.folderPath(Quickshell.env("HOME"), name)
+    if (path === "" || copyProc.running) return
+    copyProc.command = ["wl-copy", path]
+    copyProc.running = true
+  }
+
   function applyStats(raw) {
     var s = Model.parseStats(raw)
     root.cpu = s.cpu

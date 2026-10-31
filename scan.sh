@@ -33,7 +33,8 @@ printf '%s\n' "$rows" | awk '
   {
     bytes = $1
     name = substr($0, length($1) + 4)
-    gsub(/["\\]/, "", name)
+    gsub(/\\/, "\\\\", name)
+    gsub(/"/, "\\\"", name)
     total += bytes
     list = list (NR > 1 ? "," : "") "{\"name\":\"" name "\",\"bytes\":" bytes "}"
   }

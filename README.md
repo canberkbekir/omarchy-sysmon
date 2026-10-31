@@ -34,7 +34,8 @@ Popup (`Panel.qml`), split into tabs so nothing needs scrolling:
 - **CPU / GPU / MEM**: current value, average, and history graphs, the
   fan that cools it, and the top processes
 - **Storage**: used / free / total per volume, colored at 80% and 90%
-  full, plus the biggest folders in your home directory
+  full, plus the biggest folders in your home directory (click a name to
+  copy its path)
 - **Fans**: CPU fan RPM + duty and GPU fan %, each with history and the
   component driving it
 - **Procs**: full process list with a name/PID filter, sortable by

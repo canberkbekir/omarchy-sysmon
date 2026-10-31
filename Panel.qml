@@ -178,6 +178,16 @@ Panel {
   readonly property bool scanFailed: hostWidget ? hostWidget.scanFailed : false
   readonly property bool scanSlow: hostWidget ? hostWidget.scanSlow : false
 
+  // Last folder copied to the clipboard; its name flashes ✓ until cleared.
+  property string copiedFolder: ""
+
+  function copyFolder(name) {
+    if (!hostWidget) return
+    hostWidget.copyFolderPath(name)
+    root.copiedFolder = name
+    copyFlash.restart()
+  }
+
   // ---- process table state (raw list lives on hostWidget) ----
   property string procSortKey: "cpu"
   property int procSortDir: -1
@@ -216,7 +226,10 @@ Panel {
   Timer {
     id: copyFlash
     interval: 1200
-    onTriggered: root.copiedPid = -1
+    onTriggered: {
+      root.copiedPid = -1
+      root.copiedFolder = ""
+    }
   }
 
   KeyboardPanel {
@@ -898,7 +911,9 @@ Panel {
         Text {
           Layout.fillWidth: true
           textFormat: Text.PlainText
-          text: "1–" + root.tabs.length + " or ←/→ tabs · [ ] range · / filter · Esc close"
+          text: root.currentTab === "storage"
+            ? "Click a folder to copy its path · 1–" + root.tabs.length + " or ←/→ tabs · Esc close"
+            : "1–" + root.tabs.length + " or ←/→ tabs · [ ] range · / filter · Esc close"
           color: root.mutedForeground
           font.family: root.contentFontFamily
           font.pixelSize: Style.font.caption
@@ -1138,7 +1153,8 @@ Panel {
     }
   }
 
-  // One scanned folder: name, share of the home total, size.
+  // One scanned folder: name, share of the home total, size. Clicking the
+  // name copies its path and flashes ✓ until the timer clears it.
   component FolderRow: Item {
     id: folderRow
     required property var modelData
@@ -1152,11 +1168,16 @@ Panel {
       anchors.left: parent.left
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
-      text: String(folderRow.modelData.name || "")
-      color: root.contentForeground
+      text: root.copiedFolder === folderRow.modelData.name ? "✓ Copied" : String(folderRow.modelData.name || "")
+      color: root.copiedFolder === folderRow.modelData.name ? Color.accent : root.contentForeground
       font.family: root.contentFontFamily
       font.pixelSize: Style.font.body
       elide: Text.ElideRight
+      MouseArea {
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.copyFolder(folderRow.modelData.name)
+      }
     }
     Item {
       anchors.left: folderName.right

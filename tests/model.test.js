@@ -467,6 +467,11 @@ describe("storage", () => {
     assert.equal(M.parseScan("garbage"), null)
     assert.equal(M.parseScan(JSON.stringify({ total: 0, folders: [] })), null)
   })
+  it("builds absolute folder paths", () => {
+    assert.equal(M.folderPath("/home/me", ".local"), "/home/me/.local")
+    assert.equal(M.folderPath("", ".local"), "")
+    assert.equal(M.folderPath("/home/me", ""), "")
+  })
   it("clamps fractions", () => {
     assert.equal(M.fraction(25, 100), 0.25)
     assert.equal(M.fraction(200, 100), 1)

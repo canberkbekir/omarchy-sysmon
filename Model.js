@@ -296,6 +296,13 @@ function parseScan(raw) {
   return folders.length > 0 ? { total: total, folders: folders } : null;
 }
 
+// Absolute path of a home folder from the scan, "" when either part is
+// missing.
+function folderPath(home, name) {
+  var h = String(home || ""), n = String(name || "");
+  return h === "" || n === "" ? "" : h + "/" + n;
+}
+
 var STORAGE_WARN_PCT = 80;
 var STORAGE_CRIT_PCT = 90;
 
@@ -432,6 +439,7 @@ if (typeof module !== "undefined") {
     parseVolumes: parseVolumes,
     primaryVolume: primaryVolume,
     parseScan: parseScan,
+    folderPath: folderPath,
     storageLevel: storageLevel,
     fmtBytes: fmtBytes,
     fmtBarUsed: fmtBarUsed,
